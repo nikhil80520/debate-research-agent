@@ -10,6 +10,8 @@ from src.graph.state import AgentState
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+MODEL_NAME = os.getenv("CEREBRAS_MODEL", "qwen-3-235b-a22b-instruct-2507")
+FALLBACK_MODEL_NAME = os.getenv("CEREBRAS_FALLBACK_MODEL", "llama3.1-8b")
 
 
 def judge_node(state: AgentState) -> dict:
@@ -22,28 +24,50 @@ def judge_node(state: AgentState) -> dict:
             raise ValueError("CEREBRAS_API_KEY not set")
 
         client = Cerebras(api_key=api_key)
-        response = client.chat.completions.create(
-            model="llama3.1-8b",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Return ONLY raw JSON, no markdown, no backticks: "
-                        "{\"verdict\": \"...\", \"confidence_score\": 0.75, "
-                        "\"stronger_side\": \"pro\", "
-                        "\"key_uncertainties\": [\"...\"]}"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Query: {state['query']}\n\n"
-                        f"PRO:\n{state['pro_argument']}\n\n"
-                        f"CON:\n{state['con_argument']}"
-                    ),
-                },
-            ],
-        )
+        response = None
+        models_to_try = [MODEL_NAME]
+        if FALLBACK_MODEL_NAME != MODEL_NAME:
+            models_to_try.append(FALLBACK_MODEL_NAME)
+
+        for model_name in models_to_try:
+            try:
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "Return ONLY raw JSON, no markdown, no backticks: "
+                                "{\"verdict\": \"...\", \"confidence_score\": 0.75, "
+                                "\"stronger_side\": \"pro\", "
+                                "\"key_uncertainties\": [\"...\"]}"
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Query: {state['query']}\n\n"
+                                f"PRO:\n{state['pro_argument']}\n\n"
+                                f"CON:\n{state['con_argument']}"
+                            ),
+                        },
+                    ],
+                )
+                logger.info("Judge used model: %s", model_name)
+                break
+            except Exception as model_exc:
+                error_text = str(model_exc).lower()
+                if (
+                    "model_not_found" in error_text
+                    or "does not exist" in error_text
+                    or "do not have access" in error_text
+                ) and model_name != models_to_try[-1]:
+                    logger.warning("Model unavailable for judge: %s", model_name)
+                    continue
+                raise
+
+        if response is None:
+            raise RuntimeError("Failed to get response from any configured model")
 
         text = (response.choices[0].message.content or "").strip()
         parsed: dict = {}
