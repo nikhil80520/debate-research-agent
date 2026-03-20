@@ -43,8 +43,8 @@ def planner_node(state: AgentState) -> dict:
         else:
             sub_questions = [state["query"]]
 
-        if len(sub_questions) != 5:
-            raise ValueError("Planner response must contain exactly 5 strings")
+        if not sub_questions:
+            sub_questions = [state["query"]]
 
         return {"sub_questions": sub_questions}
     except Exception as exc:

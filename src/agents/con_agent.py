@@ -123,20 +123,62 @@ def con_research_node(state: AgentState) -> dict:
             else:
                 text = (msg.content or "").strip()
                 json_match = re.search(r"\{.*\}", text, re.DOTALL)
+                data: dict = {}
                 if json_match:
-                    data = json.loads(json_match.group())
-                    argument = data.get("argument", text)
-                else:
-                    argument = text
+                    try:
+                        data = json.loads(json_match.group())
+                    except json.JSONDecodeError:
+                        data = {}
+
+                tool_name = str(data.get("name", "")).strip()
+                tool_args = data.get("arguments", {})
+                if tool_name == "web_search" and isinstance(tool_args, dict):
+                    query = str(tool_args.get("query", "")).strip()
+                    if query:
+                        result = web_search.invoke(query)
+                        result_truncated = str(result)[:500]
+                        evidence_items.append(
+                            {
+                                "source": query,
+                                "content": result_truncated,
+                                "url": "",
+                            }
+                        )
+                        messages.append({"role": "assistant", "content": text})
+                        messages.append({"role": "user", "content": result_truncated})
+                        continue
+
+                argument = data.get("argument", text) if data else text
                 return {
                     "con_evidence": evidence_items,
                     "con_argument": str(argument),
                 }
 
-        return {
-            "con_evidence": evidence_items,
-            "con_argument": "Research complete based on gathered evidence",
-        }
+        final_response = client.chat.completions.create(
+            model="llama3.1-8b",
+            messages=messages
+            + [
+                {
+                    "role": "user",
+                    "content": (
+                        "Based on all the evidence gathered, provide your final "
+                        "synthesis as JSON: {\"argument\": \"your complete "
+                        "synthesis here\"}"
+                    ),
+                }
+            ],
+        )
+        text = (final_response.choices[0].message.content or "").strip()
+        json_match = re.search(r"\{.*\}", text, re.DOTALL)
+        if json_match:
+            try:
+                data = json.loads(json_match.group())
+                argument = data.get("argument", text)
+            except json.JSONDecodeError:
+                argument = text
+        else:
+            argument = text
+        return {"con_evidence": evidence_items, "con_argument": str(argument)}
     except Exception as exc:
         logger.error("Con research failed: %s", exc)
         return {"con_evidence": [], "con_argument": ""}

@@ -1,7 +1,7 @@
 import logging
 import os
 
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
@@ -16,14 +16,26 @@ def web_search(query: str) -> str:
             logger.error("TAVILY_API_KEY not set")
             return ""
 
-        search_tool = TavilySearchResults(max_results=5, tavily_api_key=api_key)
-        results = search_tool.invoke(query)
+        search_tool = TavilySearch(max_results=5)
+        raw_results = search_tool.invoke(query)
+        results: list = []
+        if isinstance(raw_results, dict):
+            candidate = raw_results.get("results", [])
+            if isinstance(candidate, list):
+                results = candidate
+        elif isinstance(raw_results, list):
+            results = raw_results
+        elif isinstance(raw_results, str):
+            return raw_results
 
         formatted_results: list[str] = []
         for result in results:
-            url = result.get("url", "")
-            content = result.get("content", "")
-            formatted_results.append(f"Source: {url}\n{content}")
+            if isinstance(result, dict):
+                url = str(result.get("url", ""))
+                content = str(result.get("content", ""))
+                formatted_results.append(f"Source: {url}\n{content}")
+            else:
+                formatted_results.append(str(result))
 
         return "\n\n".join(formatted_results)
     except Exception as exc:
